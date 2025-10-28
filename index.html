@@ -1,265 +1,95 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>3D Model Viewer</title>
+  <meta charset="utf-8" />
+  <title>Cesium — 3D Campus Viewer (SemTest.glb)</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link href="https://cdn.jsdelivr.net/npm/cesium@1.115.0/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
   <style>
-      * {
-          margin: 0;
-          padding: 0;
-          box-sizing: border-box;
-      }
-
-      body {
-          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-          overflow: hidden;
-      }
-
-      #viewer-container {
-          position: relative;
-          width: 100vw;
-          height: 100vh;
-          overflow: hidden;
-      }
-
-      #canvas-container {
-          position: absolute;
-          top: 0;
-          left: 0;
-          width: 100%;
-          height: 100%;
-      }
-
-      #instructions {
-          position: absolute;
-          bottom: 16px;
-          right: 16px;
-          background: rgba(255, 255, 255, 0.9);
-          padding: 16px;
-          border-radius: 8px;
-          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
-          z-index: 1000;
-          backdrop-filter: blur(10px);
-      }
-
-      .instruction-text {
-          display: block;
-          font-size: 12px;
-          color: #333;
-          margin-bottom: 4px;
-      }
-
-      #loading-overlay {
-          position: absolute;
-          top: 0;
-          left: 0;
-          width: 100%;
-          height: 100%;
-          background: rgba(0, 0, 0, 0.7);
-          display: flex;
-          flex-direction: column;
-          justify-content: center;
-          align-items: center;
-          z-index: 2000;
-          color: white;
-      }
-
-      .spinner {
-          width: 40px;
-          height: 40px;
-          border: 4px solid rgba(255, 255, 255, 0.3);
-          border-top: 4px solid white;
-          border-radius: 50%;
-          animation: spin 1s linear infinite;
-          margin-bottom: 16px;
-      }
-
-      @keyframes spin {
-          0% { transform: rotate(0deg); }
-          100% { transform: rotate(360deg); }
-      }
-
-      .loading-text {
-          font-size: 14px;
-          color: white;
-      }
-
-      .hidden {
-          display: none !important;
-      }
-
-      /* Controls Panel */
-      #controls-panel {
-          position: absolute;
-          top: 16px;
-          right: 16px;
-          background: rgba(255, 255, 255, 0.9);
-          padding: 16px;
-          border-radius: 8px;
-          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
-          z-index: 1000;
-          backdrop-filter: blur(10px);
-          min-width: 200px;
-      }
-
-      .control-group {
-          margin-bottom: 12px;
-      }
-
-      .control-label {
-          display: block;
-          font-size: 12px;
-          color: #333;
-          margin-bottom: 4px;
-          font-weight: 500;
-      }
-
-      .switch {
-          position: relative;
-          display: inline-block;
-          width: 44px;
-          height: 24px;
-      }
-
-      .switch input {
-          opacity: 0;
-          width: 0;
-          height: 0;
-      }
-
-      .slider {
-          position: absolute;
-          cursor: pointer;
-          top: 0;
-          left: 0;
-          right: 0;
-          bottom: 0;
-          background-color: #ccc;
-          transition: .4s;
-          border-radius: 24px;
-      }
-
-      .slider:before {
-          position: absolute;
-          content: "";
-          height: 18px;
-          width: 18px;
-          left: 3px;
-          bottom: 3px;
-          background-color: white;
-          transition: .4s;
-          border-radius: 50%;
-      }
-
-      input:checked + .slider {
-          background-color: #2196F3;
-      }
-
-      input:checked + .slider:before {
-          transform: translateX(20px);
-      }
-
-      select {
-          width: 100%;
-          padding: 6px 8px;
-          border: 1px solid #ddd;
-          border-radius: 4px;
-          font-size: 12px;
-          background: white;
-      }
-
-      /* Sidebar Info Panel */
-      #info-panel {
-          position: absolute;
-          top: 50%;
-          left: 16px;
-          transform: translateY(-50%);
-          background: rgba(255, 255, 255, 0.95);
-          padding: 16px;
-          border-radius: 8px;
-          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
-          z-index: 1500;
-          min-width: 220px;
-          display: none;
-          font-family: sans-serif;
-          animation: fadeIn 0.3s ease;
-      }
-
-      #info-panel h4 {
-          margin-bottom: 8px;
-          color: #222;
-      }
-
-      @keyframes fadeIn {
-          from { opacity: 0; transform: translateY(-48%); }
-          to { opacity: 1; transform: translateY(-50%); }
-      }
+    html,body,#cesiumContainer { width:100%; height:100%; margin:0; padding:0; overflow:hidden; font-family: Arial, Helvetica, sans-serif; }
+    header { position:absolute; left:8px; top:8px; z-index: 2000; background: rgba(255,255,255,0.95); border-radius:8px; padding:8px 12px; box-shadow:0 2px 8px rgba(0,0,0,0.2); }
+    header h1 { font-size:14px; margin:0 8px 6px 0; display:inline-block; vertical-align:middle; }
+    .controls { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+    .controls input, .controls select, .controls button { padding:6px 8px; font-size:13px; border-radius:6px; border:1px solid #ccc; }
+    aside#side { position:absolute; right:8px; top:8px; z-index:2000; width:340px; max-height:90vh; overflow:auto; background:rgba(255,255,255,0.96); border-radius:8px; padding:12px; box-shadow:0 2px 12px rgba(0,0,0,0.18); }
+    #attrs { font-size:13px; color:#222; margin-top:8px; }
+    .small { font-size:12px; color:#666; }
+    #status { margin-top:6px; font-size:12px; color:#333; }
+    #legend { margin-top:8px; }
+    .legend-bar { height:12px; background:linear-gradient(90deg,#2ecc40,#ffd700,#ff4136); border-radius:6px; }
+    .row { display:flex; gap:6px; margin-top:6px; }
+    label { font-size:12px; color:#333; }
+    #upload-row { margin-top:8px; display:flex; gap:6px; align-items:center; }
   </style>
 </head>
-
 <body>
-<div id="viewer-container">
-  <div id="canvas-container"></div>
+  <div id="cesiumContainer"></div>
 
-  <div id="loading-overlay">
-    <div class="spinner"></div>
-    <div class="loading-text">Loading 3D Model...</div>
-  </div>
-
-  <div id="controls-panel">
-    <div class="control-group">
-      <label class="control-label">Day/Night Mode</label>
-      <label class="switch">
-        <input type="checkbox" id="night-mode-toggle">
-        <span class="slider"></span>
-      </label>
-    </div>
-
-    <div class="control-group">
-      <label class="control-label">Show Basemap</label>
-      <label class="switch">
-        <input type="checkbox" id="basemap-toggle">
-        <span class="slider"></span>
-      </label>
-    </div>
-
-    <div class="control-group">
-      <label class="control-label">Basemap Type</label>
-      <select id="basemap-type">
-        <option value="osm">OpenStreetMap</option>
-        <option value="satellite">Satellite</option>
-        <option value="dark">Dark Mode</option>
+  <header>
+    <h1>UP — Cesium 3D Campus Viewer</h1>
+    <div class="controls">
+      <select id="imagery-select">
+        <option value="OSM">OpenStreetMap</option>
+        <option value="BingAerial">Bing Aerial</option>
+        <option value="CartoDark">Dark</option>
       </select>
+
+      <input id="ion-token" placeholder="(optional) Cesium Ion Token" title="Paste Cesium Ion token here to enable terrain" style="min-width:260px"/>
+
+      <button id="enable-terrain">Enable Terrain</button>
     </div>
-  </div>
 
-  <div id="instructions">
-    <span class="instruction-text">🖱️ Drag to rotate</span>
-    <span class="instruction-text">📜 Scroll to zoom</span>
-    <br />
-    <span class="instruction-text">👆 Click objects for info</span>
-  </div>
+    <div class="controls" style="margin-top:6px;">
+      <input id="model-file" type="file" accept=".glb,.gltf" />
+      <button id="load-model-btn">Load SemTest.glb</button>
 
-  <!-- Sidebar Info Panel -->
-  <div id="info-panel">
-    <h4 id="object-name">Object Info</h4>
-    <div id="object-details"><i>No object selected</i></div>
+      <label class="small">Lat</label>
+      <input id="model-lat" type="number" step="any" placeholder="-25.75368" style="width:110px" />
+      <label class="small">Lon</label>
+      <input id="model-lon" type="number" step="any" placeholder="28.23014" style="width:110px" />
+      <label class="small">Height (m)</label>
+      <input id="model-height" type="number" step="any" placeholder="0" style="width:80px" />
+      <label class="small">Scale</label>
+      <input id="model-scale" type="number" step="any" value="1" style="width:70px" />
+      <button id="place-model">Place Model</button>
+    </div>
+  </header>
 
-  </div>
-</div>
+  <aside id="side">
+    <div>
+      <label class="small">Search building name</label>
+      <div class="row">
+        <input id="search-name" placeholder="e.g. Aula" style="flex:1" />
+        <button id="search-btn">Find</button>
+      </div>
+    </div>
 
-<script type="importmap">
-  {
-    "imports": {
-      "three": "https://cdn.jsdelivr.net/npm/three@0.158.0/build/three.module.js",
-      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.158.0/examples/jsm/"
-    }
-  }
-</script>
+    <div id="legend">
+      <div class="small">Height Visualizer (Green → Yellow → Red)</div>
+      <div class="legend-bar"></div>
+      <div id="legend-range" class="small">—</div>
+      <div class="row" style="margin-top:8px;">
+        <button id="toggle-visualizer">Toggle Visualizer</button>
+        <button id="reset-view">Reset View</button>
+      </div>
+    </div>
 
-<script type="module" src="main.js"></script>
+    <div id="upload-row">
+      <label class="small">Load DBF attributes</label>
+      <input id="dbf-input" type="file" accept=".dbf" multiple />
+    </div>
+
+    <div id="status" class="small">No model loaded.</div>
+    <div id="attrs"><em>No selection</em></div>
+  </aside>
+
+  <!-- Cesium -->
+  <script src="https://cdn.jsdelivr.net/npm/cesium@1.115.0/Build/Cesium/Cesium.js"></script>
+
+  <!-- shpjs for reading DBF files -->
+  <script src="https://unpkg.com/shpjs@3.5.0/dist/shp.min.js"></script>
+
+  <!-- main JS -->
+  <script src="main.js"></script>
 </body>
 </html>
-
-

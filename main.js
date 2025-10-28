@@ -1,294 +1,368 @@
-import * as THREE from 'three';
-import { OrbitControls } from 'https://cdn.jsdelivr.net/npm/three@0.158.0/examples/jsm/controls/OrbitControls.js';
-import { GLTFLoader } from 'https://cdn.jsdelivr.net/npm/three@0.158.0/examples/jsm/loaders/GLTFLoader.js';
+// main.js (Cesium integration for SemTest.glb + DBF attribute reading)
+// IMPORTANT: If you want real Cesium World Terrain, set a Cesium Ion token in the UI field.
+// This script supports running without a token (no terrain) using imagery layers only.
 
-class BasemapManager {
-  constructor(scene) {
-    this.scene = scene;
-    this.mapMesh = null;
-    this.currentType = null;
-    this.textureLoader = new THREE.TextureLoader();
-  }
+// Simple helpers
+const $ = (id) => document.getElementById(id);
 
-  async loadBasemap(type = 'osm') {
-    let url;
-    switch (type) {
-      case 'satellite':
-        url = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/0/0/0';
-        break;
-      case 'dark':
-        url = 'https://a.basemaps.cartocdn.com/dark_all/0/0/0.png';
-        break;
-      default:
-        url = 'https://a.tile.openstreetmap.org/0/0/0.png';
+let viewer;
+let loadedModel = null;
+let modelEntity = null;
+let attributeIndex = {}; // name(lowercase) -> attributes object
+let visualizerOn = true;
+let heightRange = {min: Infinity, max: -Infinity};
+
+const CESIUM_ION_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiI2YjQ1ODJkMi03NTgwLTRkNmItYjQ0ZC1mYWQ3Zjc1MzFhMDYiLCJpZCI6MzU0OTM0LCJpYXQiOjE3NjE2NzQwNjl9.gCOKP8_NK6EgxAMnn1DJEKCgX224g_k-6QcM4fwIAvA";
+
+// initialize Cesium viewer with default imagery (OpenStreetMap)
+function initViewer() {
+  // Turn off default access token usage in Cesium unless user provides one
+  Cesium.Ion.defaultAccessToken = CESIUM_ION_TOKEN;
+  // create viewer
+viewer = new Cesium.Viewer('cesiumContainer', {
+  terrainProvider: new Cesium.CesiumTerrainProvider({
+    url: Cesium.IonResource.fromAssetId(1)
+  }),
+  timeline: false,
+  animation: false,
+  baseLayerPicker: false,
+  geocoder: false,
+  homeButton: true,
+  sceneModePicker: true,
+  navigationHelpButton: false,
+});
+
+
+  // default to OSM imagery provider
+  viewer.imageryLayers.removeAll();
+  const osm = new Cesium.OpenStreetMapImageryProvider();
+  viewer.imageryLayers.addImageryProvider(osm);
+
+  // place initial camera at UP Hatfield approx
+  viewer.camera.setView({
+    destination: Cesium.Cartesian3.fromDegrees(28.23014, -25.75368, 400)
+  });
+
+  // click handler
+  const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
+  handler.setInputAction((click) => {
+    const picked = viewer.scene.pick(click.position);
+    if (Cesium.defined(picked)) {
+      // show pick info
+      onPick(picked, click.position);
+    } else {
+      $('#attrs').innerHTML = '<em>No feature clicked</em>';
     }
+  }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+}
 
-    return new Promise((resolve, reject) => {
-      this.textureLoader.load(
-        url,
-        (texture) => {
-          texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
-          texture.repeat.set(20, 20);
-          this.createOrUpdateMap(texture);
-          resolve();
-        },
-        undefined,
-        reject
-      );
-    });
+// load or switch imagery provider
+function setImagery(type) {
+  viewer.imageryLayers.removeAll();
+  let provider;
+  switch(type) {
+    case 'BingAerial':
+      provider = new Cesium.BingMapsImageryProvider({ url: 'https://dev.virtualearth.net', key: 'A-DEMOKEY' });
+      break;
+    case 'CartoDark':
+      provider = new Cesium.UrlTemplateImageryProvider({ url: 'https://cartodb-basemaps-a.global.ssl.fastly.net/dark_all/{z}/{x}/{y}.png' });
+      break;
+    default:
+      provider = new Cesium.OpenStreetMapImageryProvider();
+  }
+  viewer.imageryLayers.addImageryProvider(provider);
+}
+
+// enable Cesium World Terrain if token provided
+async function enableTerrainWithToken(token) {
+  if(!token) {
+    alert('No Cesium Ion token provided. Terrain will not be enabled.');
+    return;
+  }
+  try {
+    Cesium.Ion.defaultAccessToken = token;
+    viewer.terrainProvider = Cesium.createWorldTerrain();
+    // enable shadows
+    viewer.scene.globe.enableLighting = true;
+    $('#status').textContent = 'Terrain enabled (Cesium World Terrain).';
+  } catch (e) {
+    console.error(e);
+    alert('Failed to enable terrain with provided token. See console.');
+  }
+}
+
+// load model from an input file or from local path 'SemTest.glb'
+async function loadGLBFromFile(fileOrUrl) {
+  // fileOrUrl can be a File object (from input) or string path
+  let url;
+  if (typeof fileOrUrl === 'string') {
+    url = fileOrUrl; // relative path
+  } else {
+    url = URL.createObjectURL(fileOrUrl);
   }
 
-  createOrUpdateMap(texture) {
-    const size = 10000;
+  if (modelEntity) {
+    viewer.entities.remove(modelEntity);
+    modelEntity = null;
+  }
 
-    if (this.mapMesh) {
-      this.mapMesh.material.map = texture;
-      this.mapMesh.material.needsUpdate = true;
+  modelEntity = viewer.entities.add({
+    name: 'SemTest model',
+    position: Cesium.Cartesian3.fromDegrees(28.23014, -25.75368, 0), // placeholder; will be updated on Place
+    model: {
+      uri: url,
+      scale: 1.0,
+      minimumPixelSize: 64,
+      incrementallyLoadTextures: true
+    }
+  });
+
+  $('#status').textContent = 'Model loaded (not placed). Use Lat/Lon/Height + Place Model.';
+  loadedModel = modelEntity;
+
+  // auto-focus camera near Pretoria (approx campus)
+    viewer.camera.flyTo({
+    destination: Cesium.Cartesian3.fromDegrees(28.23014, -25.75368, 1200),
+    duration: 2.5
+});
+
+
+}
+
+// place model using user inputs lat, lon, height, scale
+function placeModelAt(lat, lon, height, scale) {
+  if(!modelEntity) { alert('No model loaded. Click Load SemTest.glb first.'); return; }
+  const pos = Cesium.Cartesian3.fromDegrees(lon, lat, height);
+  modelEntity.position = pos;
+  modelEntity.model.scale = scale;
+  // try to clamp to terrain if terrain exists
+  if (viewer.terrainProvider && viewer.terrainProvider.ready) {
+    // nothing special; position already above ground if height chosen appropriately
+  }
+  // fly camera smoothly to the model’s bounding area once it’s ready
+viewer.scene.globe.depthTestAgainstTerrain = true;
+
+viewer.whenReadyPromise.then(() => {
+  const destination = Cesium.Cartesian3.fromDegrees(lon, lat, height + 300);
+  viewer.camera.flyTo({
+    destination,
+    orientation: {
+      heading: Cesium.Math.toRadians(0),
+      pitch: Cesium.Math.toRadians(-35),
+      roll: 0
+    },
+    duration: 2.5
+  });
+});
+
+}
+
+// on pick handler
+function onPick(picked, canvasPos) {
+  // If the picked object is an entity (our model), `picked.id` will be the entity
+  if (picked.id && picked.id === modelEntity) {
+    // We clicked the model entity — show model-level info
+    const attrs = getAttributesForModel(); // attempt to match name-based attributes
+    showAttributes(attrs || { info: 'Model clicked — no attribute match.' });
+    // highlight by setting silhouette via Cesium (not all browsers), fallback: change model color
+    highlightModel();
+    return;
+  }
+
+  // If picked has primitive, we can try to show primitive info
+  if (picked.primitive) {
+    // attempt to get instance id or model node name
+    const prim = picked.primitive;
+    let out = { primitive: String(prim.constructor.name) };
+    // if primitive is a Model, try to access glTF metadata (non-standard)
+    if (prim instanceof Cesium.Model) {
+      out.note = 'Picked Cesium.Model primitive';
+    }
+    showAttributes(out);
+    return;
+  }
+
+  // fallback
+  $('#attrs').innerHTML = '<em>Picked object not recognized</em>';
+}
+
+function showAttributes(attrs) {
+  if (!attrs) {
+    $('#attrs').innerHTML = '<em>No attributes</em>';
+    return;
+  }
+  let html = '<table style="width:100%;font-size:13px">';
+  for (const k of Object.keys(attrs)) {
+    html += `<tr><td style="font-weight:600">${k}</td><td style="text-align:right">${attrs[k]}</td></tr>`;
+  }
+  html += '</table>';
+  $('#attrs').innerHTML = html;
+}
+
+// attempt to match model name to attributes via the name key in attributeIndex
+function getAttributesForModel() {
+  // try entity name, then search a few likely keys
+  const modelName = (modelEntity && modelEntity.name) ? modelEntity.name.toLowerCase() : null;
+  if (modelName && attributeIndex[modelName]) return attributeIndex[modelName];
+  // fallback: any attribute with similar substring
+  for (const key of Object.keys(attributeIndex)) {
+    if (modelName && modelName.includes(key)) return attributeIndex[key];
+  }
+  return null;
+}
+
+function highlightModel() {
+  // simple emissive highlight: set color of model to a tint using colorBlendMode
+  if (!modelEntity) return;
+  try {
+    modelEntity.model.color = Cesium.Color.fromCssColorString('#ffd700').withAlpha(0.8);
+    modelEntity.model.colorBlendMode = Cesium.ModelColorBlendMode.REPLACE;
+    // revert after 1.2s
+    setTimeout(()=> {
+      if (modelEntity) {
+        modelEntity.model.color = Cesium.Color.WHITE;
+        modelEntity.model.colorBlendMode = Cesium.ModelColorBlendMode.MODULATE;
+      }
+    }, 1200);
+  } catch(e) {
+    console.warn('Highlight not supported for this model:', e);
+  }
+}
+
+// parse DBF files via shpjs (shp.min.js)
+async function parseDbfFile(file) {
+  try {
+    const ab = await file.arrayBuffer();
+    const records = window.shp.parseDbf(ab); // returns array of objects
+    for (const rec of records) {
+      // use 'name' field as key if it exists (per your earlier mapping)
+      const nameField = (rec.name || rec.NAME || rec.Name || rec.NAME_ || '').toString().trim();
+      if (nameField) attributeIndex[nameField.toLowerCase()] = rec;
+      // also update heightRange if numeric height attributes present
+      for (const k of Object.keys(rec)) {
+        const maybeNum = parseFloat(rec[k]);
+        if (!isNaN(maybeNum)) {
+          heightRange.min = Math.min(heightRange.min, maybeNum);
+          heightRange.max = Math.max(heightRange.max, maybeNum);
+        }
+      }
+    }
+    $('#status').textContent = `Loaded DBF: ${file.name} (${records.length} records)`;
+  } catch (e) {
+    console.error('Failed to parse DBF', e);
+    alert('Error parsing DBF file. See console.');
+  }
+}
+
+// search by name: fly camera to attribute if attribute contains coordinate, else just show attributes
+function searchByName(q) {
+  if (!q) return;
+  const key = q.toLowerCase();
+  // exact match
+  if (attributeIndex[key]) {
+    showAttributes(attributeIndex[key]);
+    // if attribute contains lat/lon fields attempt to fly to them
+    const rec = attributeIndex[key];
+    const lat = parseFloat(rec.lat || rec.Lat || rec.LAT || rec.latitude || rec.Y || rec.Y_COORD);
+    const lon = parseFloat(rec.lon || rec.Lon || rec.LON || rec.longitude || rec.X || rec.X_COORD);
+    if (!isNaN(lat) && !isNaN(lon)) {
+      viewer.camera.flyTo({ destination: Cesium.Cartesian3.fromDegrees(lon, lat, 120) });
+    }
+    return;
+  }
+  // includes match
+  for (const k of Object.keys(attributeIndex)) {
+    if (k.includes(key)) {
+      showAttributes(attributeIndex[k]);
       return;
     }
-
-    const geometry = new THREE.PlaneGeometry(size, size);
-    const material = new THREE.MeshBasicMaterial({ map: texture, side: THREE.DoubleSide });
-
-    this.mapMesh = new THREE.Mesh(geometry, material);
-    this.mapMesh.rotation.x = -Math.PI / 2;
-    this.mapMesh.position.y = -0.01;
-    this.scene.add(this.mapMesh);
   }
+  alert('No attribute record found for: ' + q);
+}
 
-  setVisible(visible) {
-    if (this.mapMesh) this.mapMesh.visible = visible;
+// toggle simple height visualizer: this implementation will color the model entity (whole) or change terrain shading.
+// For per-part coloring you'd need per-node mapping which requires model-specific node names; we color whole model as proxy.
+function toggleVisualizer() {
+  visualizerOn = !visualizerOn;
+  if (!modelEntity) return;
+  if (visualizerOn) {
+    // color model by a single color that communicates height state (we use yellow tint)
+    modelEntity.model.color = Cesium.Color.fromCssColorString('#ffcc66').withAlpha(0.99);
+    modelEntity.model.colorBlendMode = Cesium.ModelColorBlendMode.MODULATE;
+    $('#legend-range').textContent = (heightRange.min === Infinity ? '—' : `${heightRange.min} → ${heightRange.max}`);
+  } else {
+    // revert to white
+    modelEntity.model.color = Cesium.Color.WHITE;
+    modelEntity.model.colorBlendMode = Cesium.ModelColorBlendMode.MODULATE;
+    $('#legend-range').textContent = '—';
   }
 }
 
-class SimpleModelViewer {
-  constructor() {
-    this.isNight = false;
-    this.showOSM = false;
-    this.basemapType = 'osm';
-    this.model = null;
-    this.initialized = false;
+// wire UI controls
+function wireUi() {
+  $('imagery-select').addEventListener('change', (e) => setImagery(e.target.value));
+  $('enable-terrain').addEventListener('click', async () => {
+    const token = $('ion-token').value.trim();
+    if (!token) return alert('Paste your Cesium Ion token in the input to enable terrain.');
+    await enableTerrainWithToken(token);
+  });
 
-    this.init();
-    this.setupEventListeners();
-  }
-
-  init() {
-    this.scene = new THREE.Scene();
-    this.basemapManager = new BasemapManager(this.scene);
-
-    this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-    this.camera.position.set(0, 100, 200);
-
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-    this.renderer.setSize(window.innerWidth, window.innerHeight);
-    this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-    document.getElementById('canvas-container').appendChild(this.renderer.domElement);
-
-    this.controls = new OrbitControls(this.camera, this.renderer.domElement);
-    this.controls.enableDamping = true;
-    this.controls.dampingFactor = 0.05;
-    this.controls.maxPolarAngle = Math.PI / 2;
-    this.controls.minDistance = 50;
-    this.controls.maxDistance = 1000;
-
-    this.setupLighting();
-    this.updateBackground();
-    this.loadModel();
-    this.initInteraction();
-    this.animate();
-
-    window.addEventListener('resize', () => this.onWindowResize());
-  }
-
-  setupLighting() {
-    this.ambientLight = new THREE.AmbientLight(0xffffff, 0.3);
-    this.scene.add(this.ambientLight);
-
-    this.directionalLight = new THREE.DirectionalLight(0xffffff, 1.5);
-    this.directionalLight.position.set(100, 150, 50);
-    this.directionalLight.castShadow = true;
-    this.scene.add(this.directionalLight);
-
-    this.hemisphereLight = new THREE.HemisphereLight(0x87CEEB, 0x6b5d47, 0.5);
-    this.scene.add(this.hemisphereLight);
-  }
-
-  updateLighting() {
-    if (this.isNight) {
-      this.ambientLight.intensity = 0.1;
-      this.directionalLight.intensity = 0.3;
-      this.directionalLight.position.set(-100, 80, -50);
-      this.directionalLight.color.set(0x6495ED);
-      this.hemisphereLight.skyColor.set(0x0a1929);
-      this.hemisphereLight.groundColor.set(0x1a1a2e);
-      this.hemisphereLight.intensity = 0.2;
-    } else {
-      this.ambientLight.intensity = 0.3;
-      this.directionalLight.intensity = 1.5;
-      this.directionalLight.position.set(100, 150, 50);
-      this.directionalLight.color.set(0xffffff);
-      this.hemisphereLight.skyColor.set(0x87CEEB);
-      this.hemisphereLight.groundColor.set(0x6b5d47);
-      this.hemisphereLight.intensity = 0.5;
-    }
-  }
-
-  updateBackground() {
-    const dayColor = new THREE.Color(0x87CEEB);
-    const nightColor = new THREE.Color(0x0a1929);
-    this.scene.background = this.isNight ? nightColor : dayColor;
-  }
-
-  async loadModel() {
-    const loader = new GLTFLoader();
+  $('load-model-btn').addEventListener('click', async () => {
+    // attempt to load local SemTest.glb
     try {
-      const gltf = await loader.loadAsync('model.glb');
-      this.model = gltf.scene;
-      this.scene.add(this.model);
-      this.initializeModel();
-      this.hideLoadingScreen();
-    } catch (error) {
-      console.error('Error loading model:', error);
-      this.showError('Failed to load 3D model');
+      await loadGLBFromFile('SemTest.glb');
+    } catch (e) {
+      console.error(e);
+      alert('Failed to load SemTest.glb from working folder. You can also upload a .glb using the file input.');
     }
-  }
+  });
 
-  initializeModel() {
-    if (!this.model || this.initialized) return;
-
-    const box = new THREE.Box3().setFromObject(this.model);
-    const min = box.min;
-    const yOffset = -min.y;
-    this.model.position.y = yOffset;
-
-    const newBox = new THREE.Box3().setFromObject(this.model);
-    const center = newBox.getCenter(new THREE.Vector3());
-    const size = newBox.getSize(new THREE.Vector3());
-
-    const maxDim = Math.max(size.x, size.y, size.z);
-    const fov = this.camera.fov * (Math.PI / 180);
-    const distance = Math.abs(maxDim / Math.sin(fov / 2)) * 1.2;
-
-    this.camera.position.set(center.x + distance * 0.5, center.y + distance * 0.8, center.z + distance * 0.5);
-    this.camera.lookAt(center);
-    this.camera.updateProjectionMatrix();
-
-    this.controls.target.copy(center);
-    this.controls.update();
-
-    this.model.traverse((child) => {
-      if (child.isMesh) {
-        child.castShadow = true;
-        child.receiveShadow = true;
-      }
-    });
-
-    this.initialized = true;
-  }
-
-  hideLoadingScreen() {
-    document.getElementById('loading-overlay').classList.add('hidden');
-  }
-
-  showError(message) {
-    const loadingOverlay = document.getElementById('loading-overlay');
-    loadingOverlay.innerHTML = `
-      <div style="color: #ff6b6b; text-align: center;">
-        <div style="font-size: 48px; margin-bottom: 16px;">⚠️</div>
-        <div class="loading-text">${message}</div>
-      </div>`;
-  }
-
-  setupEventListeners() {
-    document.getElementById('night-mode-toggle').addEventListener('change', (e) => {
-      this.isNight = e.target.checked;
-      this.updateBackground();
-      this.updateLighting();
-    });
-
-    document.getElementById('basemap-toggle').addEventListener('change', async (e) => {
-      this.showOSM = e.target.checked;
-      if (this.showOSM) {
-        await this.basemapManager.loadBasemap(this.basemapType);
-        this.basemapManager.setVisible(true);
-      } else {
-        this.basemapManager.setVisible(false);
-      }
-    });
-
-    document.getElementById('basemap-type').addEventListener('change', async (e) => {
-      this.basemapType = e.target.value;
-      if (this.showOSM) {
-        await this.basemapManager.loadBasemap(this.basemapType);
-      }
-    });
-  }
-
-  initInteraction() {
-    this.raycaster = new THREE.Raycaster();
-    this.mouse = new THREE.Vector2();
-    this.selectedObject = null;
-    this.renderer.domElement.addEventListener('click', (event) => this.onClick(event));
-  }
-
-  onClick(event) {
-    const rect = this.renderer.domElement.getBoundingClientRect();
-    this.mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-    this.mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
-
-    this.raycaster.setFromCamera(this.mouse, this.camera);
-    const intersects = this.raycaster.intersectObjects(this.scene.children, true);
-
-    if (intersects.length > 0) {
-      const object = intersects[0].object;
-      this.showObjectInfo(object);
-      this.highlightObject(object);
+  $('model-file').addEventListener('change', (ev) => {
+    const f = ev.target.files[0];
+    if (f) {
+      loadGLBFromFile(f);
     }
-  }
+  });
 
-  showObjectInfo(object) {
-    const panel = document.getElementById('info-panel');
-    const nameEl = document.getElementById('object-name');
-    const detailsEl = document.getElementById('object-details');
+  $('place-model').addEventListener('click', () => {
+    const lat = parseFloat($('model-lat').value);
+    const lon = parseFloat($('model-lon').value);
+    const height = parseFloat($('model-height').value || 0);
+    const scale = parseFloat($('model-scale').value || 1);
+    if (isNaN(lat) || isNaN(lon)) return alert('Enter valid latitude and longitude.');
+    placeModelAt(lat, lon, height, scale);
+  });
 
-    nameEl.textContent = object.name || 'Unnamed Object';
-    const data = object.userData;
-    detailsEl.innerHTML = Object.keys(data).length
-      ? Object.entries(data).map(([k, v]) => `<div><b>${k}</b>: ${v}</div>`).join('')
-      : '<i>No attributes</i>';
-
-    panel.style.display = 'block';
-  }
-
-  highlightObject(object) {
-    if (this.selectedObject && this.selectedObject.material && this.selectedObject.material.emissive) {
-      this.selectedObject.material.emissive.set(0x000000);
+  $('dbf-input').addEventListener('change', (ev) => {
+    const files = ev.target.files;
+    for (let i=0;i<files.length;i++){
+      parseDbfFile(files[i]);
     }
+  });
 
-    if (object.material && object.material.emissive) {
-      object.material.emissive.set(0xffd700);
-    }
+  $('search-btn').addEventListener('click', () => {
+    const q = $('search-name').value.trim();
+    searchByName(q);
+  });
 
-    this.selectedObject = object;
-  }
+  $('toggle-visualizer').addEventListener('click', () => {
+    toggleVisualizer();
+  });
 
-  onWindowResize() {
-    this.camera.aspect = window.innerWidth / window.innerHeight;
-    this.camera.updateProjectionMatrix();
-    this.renderer.setSize(window.innerWidth, window.innerHeight);
-  }
-
-  animate() {
-    requestAnimationFrame(() => this.animate());
-    this.controls.update();
-    this.renderer.render(this.scene, this.camera);
-  }
+  $('reset-view').addEventListener('click', () => {
+    viewer.camera.flyHome();
+  });
 }
 
-window.addEventListener('DOMContentLoaded', () => {
-  new SimpleModelViewer();
-});
+// entry
+(function main(){
+  initViewer();
+  wireUi();
+  // if SemTest.glb exists in folder, try to pre-load silently
+  fetch('SemTest.glb', { method:'HEAD' }).then(r => {
+    if (r.ok) {
+      // show button as ready
+      $('status').textContent = 'SemTest.glb available in folder. Click Load SemTest.glb.';
+    }
+  }).catch(()=>{ /* ignore */ });
+})();
